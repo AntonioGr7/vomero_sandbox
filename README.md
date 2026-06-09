@@ -162,8 +162,8 @@ string). Keys must be valid env names. (Needs `env` from coreutils, present by
 default.) Works on `run`, `shell`, and `exec`.
 
 > This is for the *caller's* values. Don't hand your platform's own secrets to
-> untrusted code — read **[CREDENTIALS.md](CREDENTIALS.md)** for the safe patterns
-> (pre-fetch with `input_files=`, or a per-run scoped short-lived token).
+> untrusted code — prefer the safe patterns: pre-fetch with `input_files=`, or
+> pass a per-run scoped, short-lived token rather than a long-lived secret.
 
 ### Providing input files
 
