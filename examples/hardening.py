@@ -20,6 +20,8 @@ once that infrastructure exists. Needs a cluster (see examples/README.md).
 
 from vomero_sandbox import SandboxPool, SandboxConfig
 
+from _timing import timed
+
 
 def probe_defaults() -> None:
     """Demonstrate three of the on-by-default controls from inside the sandbox."""
@@ -67,6 +69,7 @@ def hardened_config() -> SandboxConfig:
     )
 
 
+@timed
 def main() -> None:
     probe_defaults()
     cfg = hardened_config()

@@ -13,6 +13,8 @@ import io
 
 from vomero_sandbox import SandboxPool, SandboxConfig
 
+from _timing import timed
+
 # A CSV the user "uploaded" on your platform.
 SALES_CSV = b"region,amount\nnorth,120\nsouth,90\nnorth,30\nsouth,60\n"
 
@@ -35,6 +37,7 @@ print(f'summarized {len(totals)} regions')
 """
 
 
+@timed
 def main() -> None:
     with SandboxPool(SandboxConfig(pool_size=1)) as pool:
         result = pool.run(

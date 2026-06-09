@@ -10,7 +10,10 @@ Works on run(), shell(), and exec(). Needs a cluster (see examples/README.md).
 
 from vomero_sandbox import SandboxPool, SandboxConfig
 
+from _timing import timed
 
+
+@timed
 def main() -> None:
     with SandboxPool(SandboxConfig(pool_size=1)) as pool:
         # Inject two variables for this run only.

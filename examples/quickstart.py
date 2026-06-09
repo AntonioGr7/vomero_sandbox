@@ -12,7 +12,10 @@ Needs a cluster (see examples/README.md).
 
 from vomero_sandbox import SandboxPool, SandboxConfig
 
+from _timing import timed
 
+
+@timed
 def main() -> None:
     # The context manager warms the pool on enter and deletes the workers on exit.
     with SandboxPool(SandboxConfig(pool_size=2)) as pool:

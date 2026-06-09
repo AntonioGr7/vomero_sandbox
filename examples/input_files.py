@@ -14,7 +14,10 @@ Needs a cluster (see examples/README.md).
 
 from vomero_sandbox import SandboxPool, SandboxConfig
 
+from _timing import timed
 
+
+@timed
 def main() -> None:
     # Pretend these came from your object store / database.
     csv_bytes = b"name,score\nada,90\ngrace,95\nlin,88\n"

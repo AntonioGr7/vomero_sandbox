@@ -359,6 +359,11 @@ SandboxConfig(
     max_age_s=600,              # retire a worker older than this
     default_timeout_s=30,       # per-run wall-clock limit
 
+    # leak protection (see "Cleanup & leaked workers"):
+    idle_shutdown_s=1800,       # workers self-terminate after this much idle time
+    auto_cleanup=True,          # close() on atexit / SIGTERM
+    reclaim_on_start=False,     # sweep orphaned workers at startup (single-pool only)
+
     # opt-in, require cluster-side setup:
     runtime_class="gvisor",                              # kernel isolation
     egress_proxy="http://egress-proxy.sandbox.svc:3128", # allowlisting egress
@@ -393,6 +398,48 @@ The two `off` controls need infrastructure this library can't provision:
 > **Secrets:** never bake your own API keys into code you run here — untrusted
 > code can read and exfiltrate them, and the egress proxy's one allowed hop is a
 > perfect exfil channel. Use per-caller keys or a key-injecting broker.
+
+## Cleanup & leaked workers
+
+Workers are pods on the **cluster**, not children of your process — so if the
+controlling process dies without calling `close()`, they keep running and
+consuming resources. Always prefer the `with` form (or `try/finally: pool.close()`),
+but that only covers *graceful* exits. Three layers guard the rest, in order of
+how much they survive:
+
+| Layer | Covers | Misses |
+|-------|--------|--------|
+| `with` / `try-finally` | exceptions, `Ctrl-C` | SIGTERM, SIGKILL, crashes |
+| **`auto_cleanup`** (atexit + SIGTERM handler) | unhandled-exception exit, normal exit, `kill <pid>` | SIGKILL, segfault, OOM, node loss |
+| **`idle_shutdown_s`** (in-pod watchdog) | *everything*, including a hard-killed or vanished controller | — |
+| **`reclaim_on_start`** (startup sweep) | orphans left by a previous crashed run | live peers' workers if they share an `app_label` |
+
+Only the **idle watchdog is cluster-side**, so it's the one that survives a
+`kill -9`, a panic, or a dead node: each worker's main process watches for
+activity and, if no run touches it for `idle_shutdown_s` (default 30 min), exits
+on its own — the pod stops and frees its CPU/memory. An actively-used warm pool
+keeps resetting that timer, so it never fires in normal operation; it's purely a
+backstop. Set `idle_shutdown_s=None` to disable (workers then live until deleted).
+
+`auto_cleanup` (on by default) registers an `atexit` hook and a SIGTERM handler
+so graceful shutdowns close the pool immediately rather than waiting out the idle
+timer. It chains any SIGTERM handler you installed earlier, and silently does
+nothing if the pool is constructed off the main thread (where signals can't be
+set) — the watchdog still covers that case.
+
+`reclaim_on_start` (off by default) makes `start()` delete any pre-existing
+workers carrying this pool's `app_label` before warming, sweeping up orphans from
+a prior crash. Enable it **only** when an `app_label` maps to a single
+pool/controller — if several pools or replicas share one, reclaim can't tell a
+live peer's workers from orphans and will delete them. To clean up by hand at any
+time: `kubectl delete pod -n <ns> -l app=<app_label>,role=worker`.
+
+> One trade-off: if a *live* pool sits idle longer than `idle_shutdown_s`, its
+> workers self-terminate and the next run pays for a replacement (and may surface
+> one error as the dead worker is detected and retired). Keep `idle_shutdown_s`
+> comfortably above your expected inter-run gap.
+
+A runnable demonstration is in [`examples/cleanup_and_leaks.py`](examples/cleanup_and_leaks.py).
 
 ## Filesystem & state (read this for agent use)
 

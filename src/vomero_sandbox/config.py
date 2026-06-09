@@ -128,6 +128,31 @@ class SandboxConfig:
     manage_namespace: bool = True
     manage_network_policy: bool = True
 
+    # --- leak protection: cleaning up orphaned workers --------------------
+    # Workers are pods on the cluster, not children of your process — so if the
+    # controlling process dies WITHOUT calling close() (a crash, SIGKILL, a lost
+    # node), they would otherwise run forever. Three layers guard against that;
+    # the first survives even a hard kill.
+    #
+    # Idle self-termination (cluster-side backstop): a worker's main process is a
+    # watchdog that exits, letting the pod stop, if no run touches it for this
+    # many seconds. Set None to disable (workers then run until explicitly
+    # deleted). Keep it comfortably above your inter-run gap: an idle pool that
+    # exceeds it sheds workers, and the next run pays for a replacement.
+    idle_shutdown_s: float | None = 1800.0     # 30 min; None to disable
+    # In-process hooks (graceful exits): when True, the pool registers an atexit
+    # handler and a SIGTERM handler so an unhandled exception, normal exit, or
+    # `kill <pid>` still calls close(). Does NOT cover SIGKILL / crashes — that's
+    # what idle_shutdown_s is for. Set False to manage signals yourself.
+    auto_cleanup: bool = True
+    # Startup reclaim: when True, start() deletes any pre-existing workers
+    # carrying this app_label in the namespace before warming, sweeping up
+    # orphans a previous (crashed) run left behind. Leave False if several pools
+    # / replicas SHARE an app_label in one namespace — reclaim can't tell live
+    # peers' workers from orphans and would delete them. Safe when each app_label
+    # maps to a single pool/controller.
+    reclaim_on_start: bool = False
+
     # --- labels -----------------------------------------------------------
     app_label: str = "vomero-sandbox"    # all pods carry app=<this>; policies target it
 
@@ -140,6 +165,8 @@ class SandboxConfig:
             raise SandboxConfigError("max_uses must be >= 1")
         if self.default_timeout_s <= 0:
             raise SandboxConfigError("default_timeout_s must be > 0")
+        if self.idle_shutdown_s is not None and self.idle_shutdown_s <= 0:
+            raise SandboxConfigError("idle_shutdown_s must be > 0 (or None to disable)")
         if not self.interpreter:
             raise SandboxConfigError("interpreter must be a non-empty argv list")
         if self.read_only_root_filesystem and not self.scratch_dir:

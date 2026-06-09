@@ -13,5 +13,12 @@ dependencies = [
     "kubernetes>=27.0.0",
 ]
 
+[project.optional-dependencies]
+# Integration smoke tests (tests/) are standalone-runnable, but this lets you
+# `pip install -e .[test]` to run them under pytest too. They need a cluster.
+test = [
+    "pytest>=7",
+]
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/vomero_sandbox"]

@@ -1,8 +1,14 @@
 """Internal: translate a SandboxConfig into a hardened worker Pod spec.
 
-A worker's main process is ``sleep infinity`` — it stays Running so we can exec
-snippets into it (the warm-pool model). Every security control from the config
-is applied here.
+A worker's main process keeps the pod Running so we can exec snippets into it
+(the warm-pool model). By default that process is an idle watchdog that exits —
+letting the pod terminate on its own — if no run touches it for
+``config.idle_shutdown_s``. This is the cluster-side backstop against leaked
+workers: if the controlling process dies without calling ``close()`` (a crash,
+SIGKILL, a lost node), the orphaned workers self-terminate instead of running
+forever. With ``idle_shutdown_s=None`` the process is a plain ``sleep infinity``
+and workers live until explicitly deleted. Every security control from the
+config is applied here.
 """
 
 from __future__ import annotations
@@ -12,6 +18,36 @@ from kubernetes import client
 from .config import SandboxConfig
 
 WORKER_ROLE = "worker"
+
+# Idle watchdog, run as the container's PID 1 (so it sees the whole PID
+# namespace). Each exec the pool runs shows up as another PID; whenever one
+# exists the idle timer resets, and once nothing but the watchdog itself has run
+# for ttl seconds it exits 0 — the container stops and the pod becomes Succeeded
+# (restartPolicy Never), freeing its CPU/memory. No heartbeat file, no extra exec
+# per run: activity is inferred straight from /proc. python is always present in
+# worker images (the collector/cleaner rely on it too).
+_IDLE_WATCHDOG = """\
+import os, time
+ttl, poll = {ttl}, {poll}
+last = time.monotonic()
+while True:
+    active = any(e.isdigit() and e != '1' for e in os.listdir('/proc'))
+    now = time.monotonic()
+    if active:
+        last = now
+    elif now - last >= ttl:
+        break
+    time.sleep(poll)
+"""
+
+
+def _worker_command(cfg: SandboxConfig) -> list[str]:
+    """The container's main process: the idle watchdog, or a bare sleep if idle
+    self-termination is disabled."""
+    if cfg.idle_shutdown_s is None:
+        return ["sleep", "infinity"]
+    poll = max(1.0, min(30.0, cfg.idle_shutdown_s / 4))
+    return ["python", "-c", _IDLE_WATCHDOG.format(ttl=cfg.idle_shutdown_s, poll=poll)]
 
 
 def build_worker_pod(cfg: SandboxConfig, name: str) -> client.V1Pod:
@@ -53,7 +89,7 @@ def build_worker_pod(cfg: SandboxConfig, name: str) -> client.V1Pod:
     container = client.V1Container(
         name="runner",
         image=cfg.image,
-        command=["sleep", "infinity"],
+        command=_worker_command(cfg),
         image_pull_policy=cfg.image_pull_policy,
         working_dir=cfg.scratch_dir,      # cwd is the writable scratch workspace
         security_context=container_sc,

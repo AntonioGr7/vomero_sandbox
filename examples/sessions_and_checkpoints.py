@@ -22,6 +22,8 @@ Needs a cluster (see examples/README.md).
 
 from vomero_sandbox import SandboxPool, SandboxConfig
 
+from _timing import timed
+
 
 def shared_workspace(pool: SandboxPool) -> None:
     """Within a session, later calls see files earlier calls wrote."""
@@ -71,6 +73,7 @@ def resume_from_checkpoint(pool: SandboxPool, blob: bytes) -> None:
         print(f" re-checkpointed: {len(new_blob)} bytes")
 
 
+@timed
 def main() -> None:
     # pool_size=1 keeps the demo deterministic; sessions work with any size
     # (each session holds one worker, so pool_size bounds concurrent sessions).

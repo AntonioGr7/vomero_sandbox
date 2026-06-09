@@ -13,6 +13,8 @@ from concurrent.futures import ThreadPoolExecutor
 
 from vomero_sandbox import SandboxPool, SandboxConfig
 
+from _timing import timed
+
 # Build the pool at import/boot time and warm it once.
 pool = SandboxPool(SandboxConfig(pool_size=5, max_uses=25, default_timeout_s=15))
 
@@ -47,6 +49,7 @@ def shutdown() -> None:
     print("pool closed")
 
 
+@timed
 def main() -> None:
     boot()
     try:

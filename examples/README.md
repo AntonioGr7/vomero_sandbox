@@ -26,11 +26,17 @@ python quickstart.py     # then run any example
 | [run_project.py](run_project.py) | uploading and running a whole multi-file package (`run_project`) |
 | [runtime_example.py](runtime_example.py) | a custom worker image with `numpy`/`matplotlib`, charting → collect the PNG |
 | [use_in_service.py](use_in_service.py) | the long-lived-service lifecycle: `start()` once, `run()` per request, `close()` at shutdown |
+| [cleanup_and_leaks.py](cleanup_and_leaks.py) | not leaking pods when the controller dies: `with`, `auto_cleanup`, `idle_shutdown_s`, `reclaim_on_start` |
 | [isolation_and_state.py](isolation_and_state.py) | filesystem state across runs, and the `max_uses` / `fresh_workdir_per_run` knobs |
 | [sessions_and_checkpoints.py](sessions_and_checkpoints.py) | multi-step `pool.session()` with a shared workspace; `checkpoint()` / `resume()` to continue across turns/processes |
 | [hardening.py](hardening.py) | the security defaults, opt-in gVisor + egress proxy, and partial-pool startup |
 
+Every example's `main()` is wrapped with `@timed`, so each run prints the
+wall-clock time from sandbox setup to completion (`⏱  <name>: N.NNs`). Most of it
+is the one-time pod scheduling + image pull on the first run, not the snippets.
+
 Supporting assets:
 
+- [_timing.py](_timing.py) — the shared `@timed` / `timeit` helper the examples use.
 - [sample_project/](sample_project/) — the package uploaded by `run_project.py`.
 - [sandbox-image/Dockerfile](sandbox-image/Dockerfile) — the custom worker image for `runtime_example.py`.

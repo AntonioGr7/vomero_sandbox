@@ -17,7 +17,10 @@ Needs a cluster (see examples/README.md).
 
 from vomero_sandbox import SandboxPool, SandboxConfig
 
+from _timing import timed
 
+
+@timed
 def main() -> None:
     with SandboxPool(SandboxConfig(pool_size=1)) as pool:
         # Write two files, then collect them by name in the same run.

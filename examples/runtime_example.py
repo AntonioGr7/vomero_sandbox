@@ -17,6 +17,8 @@ Then run it (needs a cluster — see examples/README.md).
 
 from vomero_sandbox import SandboxPool, SandboxConfig
 
+from _timing import timed
+
 # matplotlib wants a writable cache/config dir at import time; point it at the
 # writable workspace. Use the non-interactive 'Agg' backend (no display).
 CHART_CODE = """\
@@ -37,6 +39,7 @@ print('wrote chart.png')
 """
 
 
+@timed
 def main() -> None:
     cfg = SandboxConfig(image="vomero-sandbox-runtime:1.0", pool_size=1)
     with SandboxPool(cfg) as pool:

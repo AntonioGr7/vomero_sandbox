@@ -21,6 +21,7 @@ or as a context manager:
 
 from __future__ import annotations
 
+import atexit
 import base64
 import fnmatch
 import gzip
@@ -29,6 +30,7 @@ import json
 import os
 import posixpath
 import queue
+import signal
 import tarfile
 import threading
 import time
@@ -236,6 +238,8 @@ class SandboxPool:
         self._started = False
         self._closed = False
         self._start_report: PoolStartReport | None = None
+        self._cleanup_installed = False
+        self._prev_sigterm = None
 
     # --- lifecycle --------------------------------------------------------
 
@@ -252,8 +256,11 @@ class SandboxPool:
         """
         if self._started:
             return self._start_report
+        self._install_cleanup_hooks()       # close() on graceful exit / SIGTERM
         if self.config.manage_namespace:
             self._ensure_namespace()
+        if self.config.reclaim_on_start:
+            self._reclaim_orphans()         # sweep workers a crashed run left behind
         if self.config.manage_network_policy:
             self._ensure_network_policy()
 
@@ -288,12 +295,58 @@ class SandboxPool:
     def close(self) -> None:
         """Delete all worker pods owned by this pool. Safe to call more than once."""
         self._closed = True
+        self._delete_workers()
+
+    def _delete_workers(self) -> None:
+        """Delete every pod in the namespace carrying this pool's app+role labels.
+        Used by close() and by the startup reclaim sweep."""
         sel = f"app={self.config.app_label},role={WORKER_ROLE}"
         try:
             for p in self._api.list_namespaced_pod(self.config.namespace, label_selector=sel).items:
                 self._delete(p.metadata.name)
         except client.ApiException:
             pass
+
+    def _reclaim_orphans(self) -> None:
+        """Before warming, delete any pre-existing workers with this app_label —
+        orphans a previous, crashed run leaked. Only safe when the app_label maps
+        to a single pool (see SandboxConfig.reclaim_on_start)."""
+        self._delete_workers()
+
+    # --- automatic cleanup hooks (graceful exits only) --------------------
+
+    def _install_cleanup_hooks(self) -> None:
+        """Best-effort close() on interpreter exit and on SIGTERM, so a crash that
+        propagates, a normal exit, or `kill <pid>` doesn't leak workers. Idempotent
+        and opt-out via config.auto_cleanup. SIGKILL/crashes are NOT covered here —
+        that's what config.idle_shutdown_s (cluster-side) is for."""
+        if self._cleanup_installed or not self.config.auto_cleanup:
+            return
+        self._cleanup_installed = True
+        atexit.register(self._atexit_close)
+        try:
+            # Signals can only be installed from the main thread; off-thread we
+            # rely on atexit + the in-pod idle watchdog instead.
+            self._prev_sigterm = signal.getsignal(signal.SIGTERM)
+            signal.signal(signal.SIGTERM, self._handle_sigterm)
+        except (ValueError, OSError):
+            self._prev_sigterm = None
+
+    def _atexit_close(self) -> None:
+        try:
+            self.close()
+        except Exception:
+            pass        # interpreter is going down anyway; the watchdog is the backstop
+
+    def _handle_sigterm(self, signum, frame) -> None:
+        self._atexit_close()
+        prev = self._prev_sigterm
+        if callable(prev):
+            prev(signum, frame)             # chain a handler installed before us
+        elif prev == signal.SIG_IGN:
+            return                          # SIGTERM was being ignored; honor that
+        else:
+            raise SystemExit(128 + signum)  # default action: terminate (143 for SIGTERM)
 
     def __enter__(self) -> "SandboxPool":
         self.start()   # report is available via .start_report / .stats() afterwards
@@ -670,6 +723,17 @@ class SandboxPool:
                 if phase == "Failed":
                     raise SandboxStartupError(
                         f"worker {name} failed to start: {pod.status.reason}")
+                pull_err = self._image_pull_error(pod)
+                if pull_err:
+                    # The image can't be pulled — this never recovers on its own,
+                    # so fail fast with an actionable message instead of waiting
+                    # out startup_timeout_s in ImagePullBackOff.
+                    raise SandboxStartupError(
+                        f"worker {name} cannot pull image {self.config.image!r} ({pull_err}). "
+                        "Check the image name/tag and registry credentials. If it's a "
+                        "locally-built image, build it and load it into the cluster first "
+                        "(kind: `kind load docker-image <img> --name <cluster>`; "
+                        "minikube: `minikube image load <img>`).")
                 if self._is_unschedulable(pod):
                     return False
         finally:
@@ -685,6 +749,20 @@ class SandboxPool:
             if c.type == "PodScheduled" and c.status == "False" and c.reason == "Unschedulable":
                 return True
         return False
+
+    @staticmethod
+    def _image_pull_error(pod) -> str | None:
+        """Return a short reason if a container is stuck unable to pull its image
+        (a terminal misconfiguration that won't self-heal), else None. Keys on the
+        backed-off / invalid-name states, not the first transient ErrImagePull, so
+        a momentary registry hiccup still gets Kubernetes' normal retries."""
+        terminal = {"ImagePullBackOff", "InvalidImageName", "ImageInspectError",
+                    "RegistryUnavailable"}
+        for cs in (pod.status.container_statuses or []):
+            waiting = getattr(cs.state, "waiting", None) if cs.state else None
+            if waiting and waiting.reason in terminal:
+                return waiting.reason
+        return None
 
     def _delete(self, name: str, timeout_s: float = 60.0) -> None:
         """Delete a pod and wait until it's really gone. Polls for a 404 rather

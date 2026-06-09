@@ -20,10 +20,13 @@ import os
 
 from vomero_sandbox import SandboxPool, SandboxConfig
 
+from _timing import timed
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 PROJECT = os.path.join(HERE, "sample_project")
 
 
+@timed
 def main() -> None:
     with SandboxPool(SandboxConfig(pool_size=1)) as pool:
         result = pool.run_project(

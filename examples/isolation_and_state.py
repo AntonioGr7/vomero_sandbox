@@ -21,6 +21,8 @@ Needs a cluster (see examples/README.md).
 
 from vomero_sandbox import SandboxPool, SandboxConfig
 
+from _timing import timed
+
 WRITE = "open('state.txt', 'a').write('x'); print('wrote')"
 READ = ("import os; "
         "print('len', len(open('state.txt').read()) if os.path.exists('state.txt') else 'MISSING')")
@@ -37,6 +39,7 @@ def demo(title: str, cfg: SandboxConfig) -> None:
             print(f"  run {i}: {r.stdout.strip()}")
 
 
+@timed
 def main() -> None:
     # Default: each run starts with an empty workspace -> always 'len 1'.
     demo("fresh_workdir_per_run=True (default)",
