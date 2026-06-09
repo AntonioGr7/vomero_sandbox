@@ -1,0 +1,17 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "vomero_sandbox"
+version = "0.1.0"
+description = "Run untrusted code in hardened, isolated Kubernetes sandboxes."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { file = "LICENSE" }
+dependencies = [
+    "kubernetes>=27.0.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/vomero_sandbox"]
