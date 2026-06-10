@@ -167,7 +167,7 @@ default.) Works on `run`, `shell`, and `exec`.
 
 ### Providing input files
 
-To run code *against files the user selected on your platform*, pass
+To run code *against files the user selected*, pass
 `input_files=` — they're written into the working directory before the run, so
 the code reads them as ordinary local files:
 
@@ -344,6 +344,96 @@ code failing is the normal case):
 | `.ok` | `True` iff exit 0 and not timed out |
 
 Only **infrastructure** failures raise (`SandboxStartupError`, `SandboxError`, …).
+
+## Using it from async code
+
+The pool is **synchronous and thread-safe**, and there's no async API — on
+purpose. Your concurrency ceiling is `pool_size` (the number of pods), so a
+handful of blocking calls on threads is all you ever need; an event loop buys no
+extra throughput when the bottleneck is the cluster, not the I/O wait. So from
+`asyncio`, bridge with a thread instead of blocking the loop:
+
+```python
+import asyncio
+
+result = await asyncio.to_thread(pool.run, code, timeout_s=10)
+```
+
+For many concurrent jobs, bound them to the pool with a dedicated executor sized
+to `pool_size` (so a `run()` always has a thread to block in, and surplus work
+queues instead of spawning unbounded threads):
+
+```python
+import asyncio, functools
+from concurrent.futures import ThreadPoolExecutor
+
+POOL_SIZE = 5
+sandbox_exec = ThreadPoolExecutor(max_workers=POOL_SIZE)
+
+async def run_in_sandbox(code: str, **kw):
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(sandbox_exec, functools.partial(pool.run, code, **kw))
+
+results = await asyncio.gather(*(run_in_sandbox(c) for c in snippets))
+```
+
+### A queue consumer (aio-pika)
+
+The same shape works for an async broker consumer. Set the prefetch to
+`pool_size` for backpressure (the broker holds surplus work instead of your
+process), run each job on the sized executor, and `ack`/`nack` right in the
+coroutine — no thread-safe marshaling needed, since aio-pika's callbacks already
+run on the loop:
+
+```python
+import asyncio, functools, json
+from concurrent.futures import ThreadPoolExecutor
+import aio_pika
+from vomero_sandbox import SandboxPool, SandboxConfig, SandboxError
+
+POOL_SIZE = 5
+pool = SandboxPool(SandboxConfig(pool_size=POOL_SIZE, max_uses=1, default_timeout_s=30))
+sandbox_exec = ThreadPoolExecutor(max_workers=POOL_SIZE)
+
+
+async def on_message(message: aio_pika.abc.AbstractIncomingMessage) -> None:
+    loop = asyncio.get_running_loop()
+    try:
+        req = json.loads(message.body)
+        # In reality: download the code + inputs from blob storage (also off-loop).
+        code = await loop.run_in_executor(sandbox_exec, download_blob, req["code_path"])
+        result = await loop.run_in_executor(sandbox_exec, functools.partial(
+            pool.run, code.decode(), input_files={"main.py": code},
+            timeout_s=req.get("timeout_s", 30), collect=req.get("outputs")))
+        await loop.run_in_executor(sandbox_exec, persist_result, req["id"], result)
+        await message.ack()                      # user-code failure is a *result*, still ack
+    except SandboxError:
+        await message.nack(requeue=False)        # infra failure → dead-letter queue
+    except Exception:
+        await message.nack(requeue=False)
+
+
+async def main() -> None:
+    await asyncio.to_thread(pool.start)          # warm once (the warm-up is blocking)
+    conn = await aio_pika.connect_robust("amqp://rabbitmq/")
+    try:
+        channel = await conn.channel()
+        await channel.set_qos(prefetch_count=POOL_SIZE)   # ← backpressure to pool capacity
+        queue = await channel.declare_queue("jobs", durable=True)
+        await queue.consume(on_message)          # manual ack (no_ack defaults False)
+        await asyncio.Future()                   # run until cancelled
+    finally:
+        await conn.close()
+        await asyncio.to_thread(pool.close)      # delete all worker pods
+```
+
+`prefetch_count == pool_size == executor workers` gives a clean 1:1: at most
+`pool_size` jobs are ever in flight, the rest wait at the broker. Same rules as
+the threaded version — bound timeouts, prefer `max_uses=1` for untrusted
+multi-tenant input, and dead-letter infra failures rather than blind-requeueing
+a poison message. (A native `kubernetes_asyncio` rewrite would double the
+maintenance for no throughput gain, so the thread bridge is the recommended
+pattern, not a stopgap.)
 
 ## Configuration
 

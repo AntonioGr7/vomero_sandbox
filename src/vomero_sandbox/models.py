@@ -3,6 +3,21 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import NamedTuple
+
+
+class StreamChunk(NamedTuple):
+    """One piece of output yielded by a streaming run, as it is produced.
+
+    ``stream`` is ``"stdout"`` or ``"stderr"``; ``data`` is the text chunk.
+    Chunks are NOT aligned to line or token boundaries — they are whatever the
+    websocket delivered — so a consumer that needs whole lines should reassemble
+    them. Unpackable as a 2-tuple (``for stream, data in run:``) or accessed by
+    attribute (``chunk.stream`` / ``chunk.data``).
+    """
+
+    stream: str
+    data: str
 
 
 @dataclass(frozen=True)

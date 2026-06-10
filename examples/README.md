@@ -26,6 +26,8 @@ python quickstart.py     # then run any example
 | [run_project.py](run_project.py) | uploading and running a whole multi-file package (`run_project`) |
 | [runtime_example.py](runtime_example.py) | a custom worker image with `numpy`/`matplotlib`, charting → collect the PNG |
 | [use_in_service.py](use_in_service.py) | the long-lived-service lifecycle: `start()` once, `run()` per request, `close()` at shutdown |
+| [queue_consumer.py](queue_consumer.py) | a queue-driven worker service: warm once, then consume jobs (package name + input) arriving over time off a broker, running each as it lands |
+| [stress_server.py](stress_server.py) + [stress_client.py](stress_client.py) | the same job model split client/server over HTTP: a server owns the pool (`POST /run`, `GET /stats`); a tunable client drives load (jobs, concurrency, package, payload size) to stress-test it |
 | [cleanup_and_leaks.py](cleanup_and_leaks.py) | not leaking pods when the controller dies: `with`, `auto_cleanup`, `idle_shutdown_s`, `reclaim_on_start` |
 | [isolation_and_state.py](isolation_and_state.py) | filesystem state across runs, and the `max_uses` / `fresh_workdir_per_run` knobs |
 | [sessions_and_checkpoints.py](sessions_and_checkpoints.py) | multi-step `pool.session()` with a shared workspace; `checkpoint()` / `resume()` to continue across turns/processes |
@@ -39,4 +41,5 @@ Supporting assets:
 
 - [_timing.py](_timing.py) — the shared `@timed` / `timeit` helper the examples use.
 - [sample_project/](sample_project/) — the package uploaded by `run_project.py`.
+- [package_registry/](package_registry/) — the packages (`stats`, `wordcount`) the jobs in `queue_consumer.py` reference by name, each run with `python .`.
 - [sandbox-image/Dockerfile](sandbox-image/Dockerfile) — the custom worker image for `runtime_example.py`.

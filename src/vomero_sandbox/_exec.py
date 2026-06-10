@@ -53,17 +53,20 @@ print("UPLOAD_OK", len(data))
 """
 
 
-def upload_files(configuration: client.Configuration, pod: str, namespace: str,
+def upload_files(api_client: client.ApiClient, pod: str, namespace: str,
                  scratch_dir: str, files: dict[str, bytes], timeout_s: float) -> None:
     """Write ``files`` ({relpath: bytes}) into the worker's working dir via the
     exec stdin channel. Binary-safe and not bounded by argv/URL length limits.
-    Raises _UploadError on failure. Uses a dedicated ApiClient (thread-safe)."""
+    Raises _UploadError on failure.
+
+    Takes a caller-owned ``api_client`` (one per worker — see the threading note
+    in :func:`exec_stream`); it is NOT closed here, so it can be reused across the
+    worker's sequential calls."""
     import base64
 
     payload = json.dumps({rel: base64.b64encode(b).decode() for rel, b in files.items()})
     framed = f"{len(payload):016d}{payload}"   # all ASCII -> char count == byte count
 
-    api_client = client.ApiClient(configuration)
     api = client.CoreV1Api(api_client)
     code = _UPLOADER.format(root=scratch_dir)
     resp = stream(
@@ -93,27 +96,33 @@ def upload_files(configuration: client.Configuration, pod: str, namespace: str,
             resp.close()
         except Exception:
             pass
-        try:
-            api_client.close()
-        except Exception:
-            pass
 
 
-def exec_capture(configuration: client.Configuration, pod: str, namespace: str,
-                 argv: list[str], timeout_s: float) -> tuple[str, str, int]:
-    """Run ``argv`` in ``pod`` and return (stdout, stderr, exit_code).
+def exec_stream(api_client: client.ApiClient, pod: str, namespace: str,
+                argv: list[str], timeout_s: float):
+    """Run ``argv`` in ``pod`` and YIELD ('stdout'|'stderr', chunk) pairs as the
+    bytes arrive, returning the exit code (via ``StopIteration.value``) once the
+    process exits.
 
-    Uses a DEDICATED, per-call ApiClient. This is essential, not incidental:
-    kubernetes' ``stream()`` monkeypatches ``ApiClient.request`` to do websockets
-    for the duration of the exec, and that patch is NOT thread-safe. If exec
-    shared one ApiClient with the pool's CRUD calls (or with other concurrent
-    execs), a plain GET/DELETE on another thread would get routed through the
-    websocket path and fail. A fresh client per exec isolates the patch.
+    This is the streaming core: the exec websocket already delivers stdout/stderr
+    incrementally, so a caller that wants real-time output (e.g. forwarding an
+    LLM's token stream to its own client) consumes the chunks here instead of
+    waiting for the whole run. The exit status only arrives on the error channel
+    at close, so it is the generator's RETURN value, not a yielded chunk.
+
+    Threading contract: ``api_client`` must NOT be shared across concurrent execs.
+    ``stream()`` monkeypatches ``ApiClient.request`` for the duration of the call
+    and restores it in a ``finally``, so SEQUENTIAL reuse on one client is safe —
+    but two threads streaming on the same client would race that patch. The pool
+    gives each worker its own client and leases the worker exclusively, so the
+    worker's sequential calls (clean/upload/exec/collect) all reuse one client
+    while staying isolated from the CRUD clients and from other workers. The
+    client is owned by the caller and is NOT closed here.
 
     Raises _ExecTimeout if it doesn't finish within timeout_s (the caller is
     expected to retire the worker, since a runaway process may still be live).
-    """
-    api_client = client.ApiClient(configuration)
+    The ``finally`` closes the websocket even if the consumer abandons the
+    generator early (``break`` / ``.close()``)."""
     api = client.CoreV1Api(api_client)
     resp = stream(
         api.connect_get_namespaced_pod_exec,
@@ -122,8 +131,6 @@ def exec_capture(configuration: client.Configuration, pod: str, namespace: str,
         stderr=True, stdout=True, stdin=False, tty=False,
         _preload_content=False,
     )
-    out: list[str] = []
-    err: list[str] = []
     deadline = time.monotonic() + timeout_s
     try:
         while resp.is_open():
@@ -131,20 +138,40 @@ def exec_capture(configuration: client.Configuration, pod: str, namespace: str,
                 raise _ExecTimeout()
             resp.update(timeout=1)
             if resp.peek_stdout():
-                out.append(resp.read_stdout())
+                yield ("stdout", resp.read_stdout())
             if resp.peek_stderr():
-                err.append(resp.read_stderr())
-        exit_code = _exit_code(resp.read_channel(ERROR_CHANNEL))
-        return "".join(out), "".join(err), exit_code
+                yield ("stderr", resp.read_stderr())
+        return _exit_code(resp.read_channel(ERROR_CHANNEL))
     finally:
         try:
             resp.close()
         except Exception:
             pass
-        try:
-            api_client.close()
-        except Exception:
-            pass
+
+
+def exec_capture(api_client: client.ApiClient, pod: str, namespace: str,
+                 argv: list[str], timeout_s: float) -> tuple[str, str, int]:
+    """Run ``argv`` in ``pod`` and return (stdout, stderr, exit_code).
+
+    The buffered counterpart to :func:`exec_stream`: it drives the same generator
+    and joins the chunks, so behavior is identical for every existing caller. Use
+    this when you want the whole result at once; use :func:`exec_stream` when you
+    want the output as it is produced.
+
+    Raises _ExecTimeout if it doesn't finish within timeout_s (the caller is
+    expected to retire the worker, since a runaway process may still be live).
+    """
+    out: list[str] = []
+    err: list[str] = []
+    gen = exec_stream(api_client, pod, namespace, argv, timeout_s)
+    try:
+        while True:
+            kind, data = next(gen)
+            (out if kind == "stdout" else err).append(data)
+    except StopIteration as stop:
+        return "".join(out), "".join(err), stop.value
+    finally:
+        gen.close()
 
 
 def _exit_code(error_channel: str) -> int:

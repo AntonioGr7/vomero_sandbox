@@ -20,16 +20,18 @@ from .errors import (
     SandboxPoolClosed,
     SandboxStartupError,
 )
-from .models import PoolStartReport, RunResult
-from .runner import SandboxPool, SandboxSession
+from .models import PoolStartReport, RunResult, StreamChunk
+from .runner import SandboxPool, SandboxSession, SandboxStream
 
 __version__ = "0.1.0"
 
 __all__ = [
     "SandboxPool",
     "SandboxSession",
+    "SandboxStream",
     "SandboxConfig",
     "RunResult",
+    "StreamChunk",
     "PoolStartReport",
     "SandboxError",
     "SandboxConfigError",

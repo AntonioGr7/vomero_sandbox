@@ -74,6 +74,12 @@ class SandboxConfig:
     max_age_s: float = 600.0              # retire a worker older than this
     default_timeout_s: float = 30.0       # per-run wall-clock limit if run() omits one
     startup_timeout_s: float = 90.0       # how long to wait for a worker to reach Running
+    # How long run()/session entry will wait for a free worker before raising
+    # SandboxError, rather than blocking forever. None (default) blocks
+    # indefinitely (back-pressure: callers queue until a worker frees). Set a
+    # bound if you would rather fail fast than let a request hang when the pool is
+    # saturated or has shrunk because replacements couldn't be placed.
+    acquire_timeout_s: float | None = None
 
     # --- output file collection (run(..., collect=...)) -------------------
     # Cap on total bytes pulled back from the worker in one collect, so a huge
@@ -165,6 +171,8 @@ class SandboxConfig:
             raise SandboxConfigError("max_uses must be >= 1")
         if self.default_timeout_s <= 0:
             raise SandboxConfigError("default_timeout_s must be > 0")
+        if self.acquire_timeout_s is not None and self.acquire_timeout_s <= 0:
+            raise SandboxConfigError("acquire_timeout_s must be > 0 (or None to block)")
         if self.idle_shutdown_s is not None and self.idle_shutdown_s <= 0:
             raise SandboxConfigError("idle_shutdown_s must be > 0 (or None to disable)")
         if not self.interpreter:
