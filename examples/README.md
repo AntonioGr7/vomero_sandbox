@@ -31,6 +31,7 @@ python quickstart.py     # then run any example
 | [cleanup_and_leaks.py](cleanup_and_leaks.py) | not leaking pods when the controller dies: `with`, `auto_cleanup`, `idle_shutdown_s`, `reclaim_on_start` |
 | [isolation_and_state.py](isolation_and_state.py) | filesystem state across runs, and the `max_uses` / `fresh_workdir_per_run` knobs |
 | [sessions_and_checkpoints.py](sessions_and_checkpoints.py) | multi-step `pool.session()` with a shared workspace; `checkpoint()` / `resume()` to continue across turns/processes |
+| [stateful_agent.py](stateful_agent.py) | carrying in-memory **variables** (not just files) across turns: pickle the agent's state into the workspace, then `checkpoint()` / `resume()` to rehydrate it next turn |
 | [hardening.py](hardening.py) | the security defaults, opt-in gVisor + egress proxy, and partial-pool startup |
 
 Every example's `main()` is wrapped with `@timed`, so each run prints the
